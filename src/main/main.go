@@ -17,14 +17,11 @@ func main() {
 
 	globalAuthZToken := os.Getenv("TOKEN_GLOBALAUTHZ")
 	tokenIPInfo := os.Getenv("TOKEN_IPINFO")
-	tokenOpenWeather := os.Getenv("TOKEN_OPENWEATHER")
 
 	if globalAuthZToken == "" {
 		log.Fatal("No default authz token found")
 	} else if tokenIPInfo == "" {
 		log.Fatal("No token to ipinfo.io")
-	} else if tokenOpenWeather == "" {
-		log.Fatal("No token to openweathermap.org")
 	}
 
 	// create the reverse proxyGeoIP
@@ -67,7 +64,7 @@ func main() {
 			path := req.URL.Path
 			req.URL.Path = strings.TrimLeft(path, reverseProxyRoutePrefix)
 
-			println(req.URL.Path)
+			log.Print("New request from " + context.RealIP() + " to " + req.URL.String())
 
 			// ServeHttp is non-blocking and uses a go routine under the hood
 			proxyGeoIP.ServeHTTP(res, req)
@@ -75,16 +72,16 @@ func main() {
 		}
 	})
 
-	// create the reverse proxyOpenWeather
-	urlOpenWeather, err := url.Parse("https://openweathermap.org/")
+	// create the reverse proxyOpenMeteo
+	urlOpenMeteo, err := url.Parse("https://api.open-meteo.com/v1/forecast")
 	if err != nil {
 		log.Fatal(err)
 	}
-	proxyOpenWeather := httputil.NewSingleHostReverseProxy(urlOpenWeather)
+	proxyOpenMeteo := httputil.NewSingleHostReverseProxy(urlOpenMeteo)
 
-	reverseProxyRoutePrefixOW := "/weather"
-	routerGroupOW := e.Group(reverseProxyRoutePrefixOW)
-	routerGroupOW.Use(func(handlerFunc echo.HandlerFunc) echo.HandlerFunc {
+	reverseProxyRoutePrefixOM := "/weather"
+	routerGroupOM := e.Group(reverseProxyRoutePrefixOM)
+	routerGroupOM.Use(func(handlerFunc echo.HandlerFunc) echo.HandlerFunc {
 		return func(context echo.Context) error {
 
 			req := context.Request()
@@ -96,22 +93,20 @@ func main() {
 			}
 
 			// Update the headers to allow for SSL redirection
-			req.Host = urlGeoIP.Host
-			req.URL.Host = urlGeoIP.Host
-			req.URL.Scheme = urlGeoIP.Scheme
+			req.Host = urlOpenMeteo.Host
+			req.URL.Host = urlOpenMeteo.Host
+			req.URL.Scheme = urlOpenMeteo.Scheme
 			// delete authz token to proxy server
 			req.Header.Del("Authorization")
-			// add token to real third-party server
-			req.URL.Query().Add("appid", tokenOpenWeather)
 
 			//trim reverseProxyRoutePrefix
 			path := req.URL.Path
-			req.URL.Path = strings.TrimLeft(path, reverseProxyRoutePrefix)
+			req.URL.Path = strings.TrimLeft(path, reverseProxyRoutePrefixOM)
 
-			println(req.URL.Path)
+			log.Print("New request from " + context.RealIP() + " to " + req.URL.String())
 
 			// ServeHttp is non-blocking and uses a go routine under the hood
-			proxyOpenWeather.ServeHTTP(res, req)
+			proxyOpenMeteo.ServeHTTP(res, req)
 			return nil
 		}
 	})
