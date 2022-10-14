@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"github.com/labstack/echo/v4"
 	"log"
+	"net"
+	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
@@ -12,10 +15,13 @@ import (
 func main() {
 	e := echo.New()
 
+	globalAuthZToken := os.Getenv("TOKEN_GLOBALAUTHZ")
 	tokenIPInfo := os.Getenv("TOKEN_IPINFO")
 	tokenOpenWeather := os.Getenv("TOKEN_OPENWEATHER")
 
-	if tokenIPInfo == "" {
+	if globalAuthZToken == "" {
+		log.Fatal("No default authz token found")
+	} else if tokenIPInfo == "" {
 		log.Fatal("No token to ipinfo.io")
 	} else if tokenOpenWeather == "" {
 		log.Fatal("No token to openweathermap.org")
@@ -37,18 +43,24 @@ func main() {
 			res := context.Response().Writer
 			clientIp := context.RealIP()
 
-			//may be some extra validations before sending request like Auth etc.
-			/*if req.Header.Get("X-Custom-Header") != "123" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
-			}*/
+			// AuthZ check
+			if req.Header.Get("Authorization") != globalAuthZToken {
+				return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid authorization token")
+			}
 
 			// Update the headers to allow for SSL redirection
 			req.Host = urlGeoIP.Host
 			req.URL.Host = urlGeoIP.Host
 			req.URL.Scheme = urlGeoIP.Scheme
-			if clientIp != "::1" {
+			isPrivateIP, errPrivateIP := privateIP(clientIp)
+			if errPrivateIP != nil {
+				log.Panic(errPrivateIP)
+			} else if !isPrivateIP {
 				req.URL.Path += clientIp
 			}
+			// delete authz token to proxy server
+			req.Header.Del("Authorization")
+			// add token to real third-party server
 			req.URL.Query().Add("token", tokenIPInfo)
 
 			//trim reverseProxyRoutePrefix
@@ -78,15 +90,18 @@ func main() {
 			req := context.Request()
 			res := context.Response().Writer
 
-			//may be some extra validations before sending request like Auth etc.
-			/*if req.Header.Get("X-Custom-Header") != "123" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid credentials")
-			}*/
+			// AuthZ check
+			if req.Header.Get("Authorization") != globalAuthZToken {
+				return echo.NewHTTPError(http.StatusUnauthorized, "Please provide valid authorization token")
+			}
 
 			// Update the headers to allow for SSL redirection
 			req.Host = urlGeoIP.Host
 			req.URL.Host = urlGeoIP.Host
 			req.URL.Scheme = urlGeoIP.Scheme
+			// delete authz token to proxy server
+			req.Header.Del("Authorization")
+			// add token to real third-party server
 			req.URL.Query().Add("appid", tokenOpenWeather)
 
 			//trim reverseProxyRoutePrefix
@@ -105,4 +120,21 @@ func main() {
 	if errServer != nil {
 		log.Fatal(errServer)
 	}
+}
+
+func privateIP(ip string) (bool, error) {
+	var err error
+	private := false
+	IP := net.ParseIP(ip)
+	if IP == nil {
+		err = errors.New("invalid IP")
+	} else {
+		_, private24BitBlock, _ := net.ParseCIDR("10.0.0.0/8")
+		_, private20BitBlock, _ := net.ParseCIDR("172.16.0.0/12")
+		_, private16BitBlock, _ := net.ParseCIDR("192.168.0.0/16")
+		_, localhost127, _ := net.ParseCIDR("127.0.0.1/8")
+		_, localhostIPv6, _ := net.ParseCIDR("::1/1")
+		private = private24BitBlock.Contains(IP) || private20BitBlock.Contains(IP) || private16BitBlock.Contains(IP) || localhost127.Contains(IP) || localhostIPv6.Contains(IP)
+	}
+	return private, err
 }
